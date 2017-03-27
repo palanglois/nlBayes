@@ -10,5 +10,17 @@ add_definitions(-DICPSPARSE_MEDIA_DIR="\\"${CMAKE_CURRENT_SOURCE_DIR}/media/\\""
 #Adding current directory for include
 include_directories(${CMAKE_CURRENT_LIST_DIR})
 
+#Adding lodepng
+add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/ext/lodepng)
+include_directories(${CMAKE_CURRENT_LIST_DIR}/ext/lodepng)
+
+#Adding Eigen
+include_directories(${CMAKE_CURRENT_LIST_DIR}/ext/Eigen)
+
+#Adding the standard nl bayes implementation
+add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/lib/stdNlBayes)
+include_directories(${CMAKE_CURRENT_LIST_DIR}/lib/stdNlBayes)
+
 add_executable(nlBayes main.cpp)
+target_link_libraries(nlBayes stdNlBayes)
 
