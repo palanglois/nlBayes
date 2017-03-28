@@ -55,11 +55,11 @@ StdNlBayes::StdNlBayes(double _sigma) : sigma(_sigma)
     beta2 = 1.2;
 
   //n1 and n2
-  //n1 = 7*k1;
-  //n2 = 7*k2;
+  n1 = 7*k1;
+  n2 = 7*k2;
   //// FOR DEBUG
-  n1 = 2*k1;
-  n1 = 2*k2;
+  //n1 = 2*k1;
+  //n1 = 2*k2;
 
   //N_1 and N_2
   switch(k1)
@@ -111,9 +111,8 @@ void StdNlBayes::run()
   
   //Computing all the stacks
   // All the patches for the y channel
-  vector<vector<PatchStack>> yStack(image[0].rows(),vector<PatchStack>(image[0].cols(),PatchStack(0))); 
-  vector<vector<PatchStack>> uStack(image[0].rows(),vector<PatchStack>(image[0].cols(),PatchStack(0))); 
-  vector<vector<PatchStack>> vStack(image[0].rows(),vector<PatchStack>(image[0].cols(),PatchStack(0))); 
+  ImageStack yuvStack;
+  yuvStack.fill(ChannelStack(image[0].rows(),vector<PatchStack>(image[0].cols(),PatchStack(0,MatrixXd::Zero(k1,k1)))));
   for(int i=0;i<image[0].rows();i++)
   {
     for(int j=0;j<image[0].cols();j++)
@@ -146,18 +145,97 @@ void StdNlBayes::run()
       OrderedIt itV = vList.begin();
       for(OrderedIt it = yList.begin(); it != yList.end() && count < N_1;it++)
       {
-        yStack[i][j].push_back(it->first);
-        uStack[i][j].push_back(itU->first);
-        vStack[i][j].push_back(itV->first);
+        yuvStack[0][i][j].push_back(it->first);
+        yuvStack[1][i][j].push_back(itU->first);
+        yuvStack[2][i][j].push_back(itV->first);
         count++;
         itU++;
         itV++;
       }
-      //cout << yStack[i][j].size() << " " << N_1 << endl;
     }
     cout << "line : " << i << " out of " << image[0].rows() << endl;
   }
   cout << "Stack computed for the first step." << endl;
+  //Collaborative filtering
+  double M_1 = N_1 * pow(k1,2);
+  ImageStack colStack;
+  colStack.fill(ChannelStack(image[0].rows(),vector<PatchStack>(image[0].cols(),PatchStack(0,MatrixXd::Zero(k1,k1)))));
+  for(int channel = 0; channel < 3; channel++)
+  {
+    for(int i=0;i<image[0].rows();i++)
+    {
+      for(int j=0;j<image[0].cols();j++)
+      {
+        //Estimating sigma_p
+        PatchStack& currentStack = yuvStack[channel][i][j];
+        //By definition p is the first patch of the stack
+        MatrixXd p;
+        if(currentStack.size() > 0) p = currentStack[0]; else continue;
+        double sigmaP = estimateSigmaP(currentStack,M_1);
+        MatrixXd qBasic = MatrixXd::Zero(k1,k1);
+        //Building an estimate for each patch of each stack
+        if(sigmaP <= gamma * sigma)
+        {
+          for(int k=0;k<currentStack.size();k++)
+            qBasic += currentStack[k];
+          qBasic /= currentStack.size();
+          for(int k=0;k<currentStack.size();k++)
+            colStack[channel][i][j].push_back(qBasic);
+        }
+        else
+        {
+          MatrixXd cp = MatrixXd::Zero(k1,k1);
+          MatrixXd pAverage = MatrixXd::Zero(k1,k1);
+          if(currentStack.size() < 2) continue;
+          for(int k=0;k<currentStack.size();k++)
+          {
+            MatrixXd diff = currentStack[k] - p;
+            cp += diff*diff.transpose();
+            pAverage += currentStack[k];
+          }
+          pAverage /= currentStack.size();
+          cp /= (currentStack.size()-1);
+          MatrixXd id(k1,k1);
+          id.setIdentity();
+          for(int k=0;k<currentStack.size();k++)
+          {
+            qBasic = pAverage + 
+                     (cp - beta1 * pow(sigma,2) * id)*cp.inverse()*(currentStack[k]-pAverage);
+            colStack[channel][i][j].push_back(qBasic);
+          }
+        }
+      }
+    }
+    cout << "Performed collaboration for channel " << channel << endl;
+  }
+  cout << "Collaborative filtering done" << endl;
+  //Aggregation
+  ImageBuffer bufferIm = zeroImage(image[0].rows(),image[0].cols());
+  ImageBuffer bufferW = zeroImage(image[0].rows(),image[0].cols());
+  for(int channel = 0; channel < 3; channel++)
+  {
+    for(int i=0;i<image[0].rows();i++)
+    {
+      for(int j=0;j<image[0].cols();j++)
+      {
+        PatchStack& currentStack = colStack[channel][i][j];
+        if(currentStack.size() < N_1)
+          continue;
+        for(int k=0;k<currentStack.size();k++)
+        {
+          int i0 = i - p1;
+          int j0 = j - p1;
+          bufferIm[channel].block(i0,j0,k1,k1) += currentStack[k];
+          bufferW[channel].block(i0,j0,k1,k1) += MatrixXd::Ones(k1,k1);
+        }
+      }
+    }
+  }
+  for(int channel = 0; channel<3;channel++)
+  {
+    image_u[channel] = bufferIm[channel].cwiseQuotient(bufferW[channel]);
+  }
+  image_u = rgb2yuv(image_u,true);
 }
 
 /* 
@@ -253,6 +331,14 @@ void StdNlBayes::saveImage(ImageType imToSave, string filePath) const
 }
 
 /*
+Saving the resulting png image to filePath
+*/
+void StdNlBayes::saveResult(string filePath) const
+{
+  saveImage(image_u,filePath);
+}
+
+/*
 Compute distance between two patches
 */
 double StdNlBayes::getDistance(ImageChannel chan, int i0, int j0, int i1, int j1, int w, int h) const
@@ -262,4 +348,15 @@ double StdNlBayes::getDistance(ImageChannel chan, int i0, int j0, int i1, int j1
     for(int j=-h;j<=h;j++)
       dist += pow(chan(i0+i,j0+j)-chan(i1+i,j1+j),2);
   return dist;
+}
+
+/*
+Estimate standard deviation of a stack of similar patches
+*/
+double StdNlBayes::estimateSigmaP(const PatchStack stack, double M_1) const
+{
+  double sigmaP = 0;
+  for(int i=0;i<stack.size();i++)
+    sigmaP += (1/M_1)*stack[i].cwiseProduct(stack[i]).sum() - pow((1/M_1)*stack[i].sum(),2);
+  return M_1 / (M_1 - 1.) * sigmaP;
 }
