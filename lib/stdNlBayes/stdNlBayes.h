@@ -6,6 +6,7 @@
 #include <array>
 #include <cmath>
 #include <iostream>
+#include <fstream>
 #include <Eigen/Core>
 #include <Eigen/Dense>
 #include "lodepng.h"
@@ -25,6 +26,8 @@ public:
   ImageType rgb2yuv(ImageType src, bool inverse = false) const;
   //Create a 0 image
   ImageType zeroImage(int rows, int cols) const;
+  //Save an image to a file
+  void saveImage(ImageType imToSave, std::string filePath) const;
 private:
   ImageType image;
   ImageType image_yuv;

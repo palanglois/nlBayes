@@ -169,3 +169,29 @@ ImageType StdNlBayes::zeroImage(int rows, int cols) const
   return image;
 }
 
+/*
+Save an image to a file as png
+*/
+void StdNlBayes::saveImage(ImageType imToSave, string filePath) const
+{
+  //Align image
+  std::vector<unsigned char> imageLine;
+  for(int j=0;j<imToSave[0].cols();j++)
+    for(int i=0;i<imToSave[0].rows();i++) 
+    {
+      imageLine.push_back(imToSave[0](i,j));  //R
+      imageLine.push_back(imToSave[1](i,j));  //G
+      imageLine.push_back(imToSave[2](i,j));  //B
+      imageLine.push_back(255);               //alpha
+    }
+  //Encode it to png
+  std::vector<unsigned char> png;
+  lodepng::State state;
+  unsigned error = lodepng::encode(png, imageLine, 
+                                   imToSave[0].rows(), imToSave[0].cols(), state);
+  if(error)
+    cerr << "ERROR : while saving file " << filePath << endl;
+
+  //Write image to disk
+  lodepng::save_file(png, filePath.c_str());
+}
