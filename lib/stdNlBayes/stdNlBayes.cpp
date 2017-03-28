@@ -55,8 +55,11 @@ StdNlBayes::StdNlBayes(double _sigma) : sigma(_sigma)
     beta2 = 1.2;
 
   //n1 and n2
-  n1 = 7*k1;
-  n2 = 7*k2;
+  //n1 = 7*k1;
+  //n2 = 7*k2;
+  //// FOR DEBUG
+  n1 = 2*k1;
+  n1 = 2*k2;
 
   //N_1 and N_2
   switch(k1)
@@ -100,8 +103,61 @@ void StdNlBayes::run()
 {
   ////// FIRST STEP //////  
 
+  int w1 = (n1-1)/2; //Neighbourhood size
+  int p1 = (k1-1)/2; //patch size
+
   //Convert the image to yuv
   image_yuv = rgb2yuv(image);
+  
+  //Computing all the stacks
+  // All the patches for the y channel
+  vector<vector<PatchStack>> yStack(image[0].rows(),vector<PatchStack>(image[0].cols(),PatchStack(0))); 
+  vector<vector<PatchStack>> uStack(image[0].rows(),vector<PatchStack>(image[0].cols(),PatchStack(0))); 
+  vector<vector<PatchStack>> vStack(image[0].rows(),vector<PatchStack>(image[0].cols(),PatchStack(0))); 
+  for(int i=0;i<image[0].rows();i++)
+  {
+    for(int j=0;j<image[0].cols();j++)
+    {
+      OrderedList yList;
+      OrderedList uList;
+      OrderedList vList;
+      //Computing patches
+      for(int iPatch = -w1; iPatch <= w1; iPatch++)
+      {
+        for(int jPatch = -w1;jPatch <= w1; jPatch++)
+        {
+          if(i-p1 < 0 || image[0].rows() <= i+p1)
+            continue;
+          if(j-p1 < 0 || image[0].cols() <= j+p1)
+            continue;
+          if(i+iPatch-p1 < 0 || image[0].rows() <= i+iPatch+p1)
+            continue;
+          if(j+jPatch-p1 < 0 || image[0].cols() <= j+jPatch+p1)
+            continue;
+          double curDist = getDistance(image_yuv[0],i+iPatch,j+jPatch,i,j,p1,p1) / pow(k1,2);
+          yList.insert(Patch(image_yuv[0].block(i+iPatch-p1,j+jPatch-p1,k1,k1),curDist));
+          uList.insert(Patch(image_yuv[1].block(i+iPatch-p1,j+jPatch-p1,k1,k1),curDist));
+          vList.insert(Patch(image_yuv[2].block(i+iPatch-p1,j+jPatch-p1,k1,k1),curDist));
+        }
+      }
+      //Storing the N_1 best patches
+      int count = 0;
+      OrderedIt itU = uList.begin();
+      OrderedIt itV = vList.begin();
+      for(OrderedIt it = yList.begin(); it != yList.end() && count < N_1;it++)
+      {
+        yStack[i][j].push_back(it->first);
+        uStack[i][j].push_back(itU->first);
+        vStack[i][j].push_back(itV->first);
+        count++;
+        itU++;
+        itV++;
+      }
+      //cout << yStack[i][j].size() << " " << N_1 << endl;
+    }
+    cout << "line : " << i << " out of " << image[0].rows() << endl;
+  }
+  cout << "Stack computed for the first step." << endl;
 }
 
 /* 
@@ -194,4 +250,16 @@ void StdNlBayes::saveImage(ImageType imToSave, string filePath) const
 
   //Write image to disk
   lodepng::save_file(png, filePath.c_str());
+}
+
+/*
+Compute distance between two patches
+*/
+double StdNlBayes::getDistance(ImageChannel chan, int i0, int j0, int i1, int j1, int w, int h) const
+{
+  double dist = 0.;
+  for(int i=-w;i<=w;i++)
+    for(int j=-h;j<=h;j++)
+      dist += pow(chan(i0+i,j0+j)-chan(i1+i,j1+j),2);
+  return dist;
 }
