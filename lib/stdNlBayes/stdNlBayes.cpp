@@ -59,7 +59,7 @@ StdNlBayes::StdNlBayes(double _sigma) : sigma(_sigma)
   n2 = 7*k2;
   //// FOR DEBUG
   //n1 = 2*k1;
-  //n1 = 2*k2;
+  //n2 = 2*k2;
 
   //N_1 and N_2
   switch(k1)
@@ -111,8 +111,8 @@ void StdNlBayes::run()
   
   //Computing all the stacks
   // All the patches for the y channel
-  ImageStack yuvStack;
-  yuvStack.fill(ChannelStack(image[0].rows(),vector<PatchStack>(image[0].cols(),PatchStack(0,MatrixXd::Zero(k1,k1)))));
+  ImageStack* yuvStack = new ImageStack();
+  yuvStack->fill(ChannelStack(image[0].rows(),vector<PatchStack>(image[0].cols(),PatchStack(0,MatrixXd::Zero(k1,k1)))));
   for(int i=0;i<image[0].rows();i++)
   {
     for(int j=0;j<image[0].cols();j++)
@@ -145,9 +145,9 @@ void StdNlBayes::run()
       OrderedIt itV = vList.begin();
       for(OrderedIt it = yList.begin(); it != yList.end() && count < N_1;it++)
       {
-        yuvStack[0][i][j].push_back(it->first);
-        yuvStack[1][i][j].push_back(itU->first);
-        yuvStack[2][i][j].push_back(itV->first);
+        (*yuvStack)[0][i][j].push_back(it->first);
+        (*yuvStack)[1][i][j].push_back(itU->first);
+        (*yuvStack)[2][i][j].push_back(itV->first);
         count++;
         itU++;
         itV++;
@@ -158,8 +158,8 @@ void StdNlBayes::run()
   cout << "Stack computed for the first step." << endl;
   //Collaborative filtering
   double M_1 = N_1 * pow(k1,2);
-  ImageStack colStack;
-  colStack.fill(ChannelStack(image[0].rows(),vector<PatchStack>(image[0].cols(),PatchStack(0,MatrixXd::Zero(k1,k1)))));
+  ImageStack* colStack = new ImageStack();
+  colStack->fill(ChannelStack(image[0].rows(),vector<PatchStack>(image[0].cols(),PatchStack(0,MatrixXd::Zero(k1,k1)))));
   for(int channel = 0; channel < 3; channel++)
   {
     for(int i=0;i<image[0].rows();i++)
@@ -167,10 +167,10 @@ void StdNlBayes::run()
       for(int j=0;j<image[0].cols();j++)
       {
         //Estimating sigma_p
-        PatchStack& currentStack = yuvStack[channel][i][j];
+        PatchStack& currentStack = (*yuvStack)[channel][i][j];
+        if(currentStack.size() < 2) continue;
         //By definition p is the first patch of the stack
-        MatrixXd p;
-        if(currentStack.size() > 0) p = currentStack[0]; else continue;
+        MatrixXd p = currentStack[0];
         double sigmaP = estimateSigmaP(currentStack,M_1);
         MatrixXd qBasic = MatrixXd::Zero(k1,k1);
         //Building an estimate for each patch of each stack
@@ -180,13 +180,12 @@ void StdNlBayes::run()
             qBasic += currentStack[k];
           qBasic /= currentStack.size();
           for(int k=0;k<currentStack.size();k++)
-            colStack[channel][i][j].push_back(qBasic);
+            (*colStack)[channel][i][j].push_back(qBasic);
         }
         else
         {
           MatrixXd cp = MatrixXd::Zero(k1,k1);
           MatrixXd pAverage = MatrixXd::Zero(k1,k1);
-          if(currentStack.size() < 2) continue;
           for(int k=0;k<currentStack.size();k++)
           {
             MatrixXd diff = currentStack[k] - p;
@@ -195,19 +194,19 @@ void StdNlBayes::run()
           }
           pAverage /= currentStack.size();
           cp /= (currentStack.size()-1);
-          MatrixXd id(k1,k1);
-          id.setIdentity();
+          MatrixXd id = MatrixXd::Identity(k1,k1);
           for(int k=0;k<currentStack.size();k++)
           {
             qBasic = pAverage + 
                      (cp - beta1 * pow(sigma,2) * id)*cp.inverse()*(currentStack[k]-pAverage);
-            colStack[channel][i][j].push_back(qBasic);
+            (*colStack)[channel][i][j].push_back(qBasic);
           }
         }
       }
     }
     cout << "Performed collaboration for channel " << channel << endl;
   }
+  delete yuvStack;
   cout << "Collaborative filtering done" << endl;
   //Aggregation
   ImageBuffer bufferIm = zeroImage(image[0].rows(),image[0].cols());
@@ -218,7 +217,7 @@ void StdNlBayes::run()
     {
       for(int j=0;j<image[0].cols();j++)
       {
-        PatchStack& currentStack = colStack[channel][i][j];
+        PatchStack& currentStack = (*colStack)[channel][i][j];
         if(currentStack.size() < N_1)
           continue;
         for(int k=0;k<currentStack.size();k++)
@@ -231,11 +230,135 @@ void StdNlBayes::run()
       }
     }
   }
+  delete colStack;
   for(int channel = 0; channel<3;channel++)
   {
+    //Avoid 0 division
+    bufferW[channel] = bufferW[channel].unaryExpr([](double v){return v==0?1:v;});
     image_u[channel] = bufferIm[channel].cwiseQuotient(bufferW[channel]);
   }
-  image_u = rgb2yuv(image_u,true);
+  image_u_rgb = rgb2yuv(image_u,true);
+
+  //////SECOND STEP//////
+  //Computing the second stacks
+  int w2 = (n2-1)/2;
+  int p2 = (k2-1)/2;
+  ImageStack* yuvStack2 = new ImageStack();
+  yuvStack2->fill(ChannelStack(image[0].rows(),vector<PatchStack>(image[0].cols(),PatchStack(0,MatrixXd::Zero(k1,k1)))));
+  for(int i=0;i<image[0].rows();i++)
+  {
+    for(int j=0;j<image[0].cols();j++)
+    {
+      OrderedList yList;
+      OrderedList uList;
+      OrderedList vList;
+      //Computing patches
+      for(int iPatch = -w2; iPatch <= w2; iPatch++)
+      {
+        for(int jPatch = -w2;jPatch <= w2; jPatch++)
+        {
+          if(i-p2 < 0 || image[0].rows() <= i+p2)
+            continue;
+          if(j-p2 < 0 || image[0].cols() <= j+p2)
+            continue;
+          if(i+iPatch-p2 < 0 || image[0].rows() <= i+iPatch+p2)
+            continue;
+          if(j+jPatch-p2 < 0 || image[0].cols() <= j+jPatch+p2)
+            continue;
+          double curDist = getDistance2(image_u,i+iPatch,j+jPatch,i,j,p2,p2) / (3*pow(k2,2));
+          yList.insert(Patch(image_u[0].block(i+iPatch-p2,j+jPatch-p2,k2,k2),curDist));
+          uList.insert(Patch(image_u[1].block(i+iPatch-p2,j+jPatch-p2,k2,k2),curDist));
+          vList.insert(Patch(image_u[2].block(i+iPatch-p2,j+jPatch-p2,k2,k2),curDist));
+        }
+      }
+      //Storing according to the tau criterion
+      //Computing tau
+      double tau = tau0;
+      if(yList.size() >= N_2)
+      {
+        OrderedIt it = yList.begin();
+        std::advance(it, N_2);
+        tau = max(tau0,it->second);
+      }
+      //Storing the patches whose distance is at most tau 
+      OrderedIt itU = uList.begin();
+      OrderedIt itV = vList.begin();
+      for(OrderedIt it = yList.begin(); it != yList.end() && it->second <= tau;it++)
+      {
+        (*yuvStack2)[0][i][j].push_back(it->first);
+        (*yuvStack2)[1][i][j].push_back(itU->first);
+        (*yuvStack2)[2][i][j].push_back(itV->first);
+        itU++;
+        itV++;
+      }
+    }
+    cout << "line : " << i << " out of " << image[0].rows() << endl;
+  }
+  cout << "Stack computed for the second step." << endl;
+  //Collaborative filtering
+  ImageStack* colStack2 = new ImageStack();
+  colStack2->fill(ChannelStack(image[0].rows(),vector<PatchStack>(image[0].cols(),PatchStack(0,MatrixXd::Zero(k1,k1)))));
+  for(int channel = 0; channel < 3; channel++)
+  {
+    for(int i=0;i<image[0].rows();i++)
+    {
+      for(int j=0;j<image[0].cols();j++)
+      {
+        PatchStack& currentStack = (*yuvStack2)[channel][i][j];
+        if(currentStack.size() < 2) continue;
+        //By definition p is the first patch of the stack
+        MatrixXd p = currentStack[0];
+        MatrixXd cpBasic = MatrixXd::Zero(k2,k2);
+        MatrixXd pAverageBasic = MatrixXd::Zero(k2,k2);
+        for(int k=0;k<currentStack.size();k++)
+        {
+          MatrixXd diff = currentStack[k] - p;
+          cpBasic += diff*diff.transpose();
+          pAverageBasic += currentStack[k];
+        }
+        pAverageBasic /= currentStack.size();
+        cpBasic /= (currentStack.size()-1);
+        MatrixXd id = MatrixXd::Identity(k2,k2);
+        for(int k=0;k<currentStack.size();k++)
+        {
+          MatrixXd qFinal = pAverageBasic + 
+             cpBasic * 
+             (cpBasic+beta2*pow(sigma,2)*id).inverse() * 
+             (currentStack[k]-pAverageBasic);
+          (*colStack2)[channel][i][j].push_back(qFinal);
+        }
+      }
+    }
+    cout << "Performed collaboration for channel " << channel << endl;
+  }
+  cout << "Collaborative filtering done" << endl;
+  //Aggregation
+  ImageBuffer bufferIm2 = zeroImage(image[0].rows(),image[0].cols());
+  ImageBuffer bufferW2 = zeroImage(image[0].rows(),image[0].cols());
+  for(int channel = 0; channel < 3; channel++)
+  {
+    for(int i=0;i<image[0].rows();i++)
+    {
+      for(int j=0;j<image[0].cols();j++)
+      {
+        PatchStack& currentStack = (*colStack2)[channel][i][j];
+        for(int k=0;k<currentStack.size();k++)
+        {
+          int i0 = i - p2;
+          int j0 = j - p2;
+          bufferIm2[channel].block(i0,j0,k2,k2) += currentStack[k];
+          bufferW2[channel].block(i0,j0,k2,k2) += MatrixXd::Ones(k2,k2);
+        }
+      }
+    }
+  }
+  for(int channel = 0; channel<3; channel++)
+  {
+    //Avoid 0 division
+    bufferW2[channel] = bufferW2[channel].unaryExpr([](double v){return v==0?1:v;});
+    image_final[channel] = bufferIm2[channel].cwiseQuotient(bufferW2[channel]);
+  }
+  image_final_rgb = rgb2yuv(image_final,true);
 }
 
 /* 
@@ -335,7 +458,7 @@ Saving the resulting png image to filePath
 */
 void StdNlBayes::saveResult(string filePath) const
 {
-  saveImage(image_u,filePath);
+  saveImage(image_final_rgb,filePath);
 }
 
 /*
@@ -351,6 +474,17 @@ double StdNlBayes::getDistance(ImageChannel chan, int i0, int j0, int i1, int j1
 }
 
 /*
+Compute distance between patches for second step
+*/
+double StdNlBayes::getDistance2(ImageType im, int i0, int j0, int i1, int j1, int w, int h) const
+{
+  double dist = 0.;
+  for(int channel=0;channel<3;channel++)
+    dist += getDistance(im[channel],i0,j0,i1,j1,w,h);
+  return dist;
+}
+
+/*
 Estimate standard deviation of a stack of similar patches
 */
 double StdNlBayes::estimateSigmaP(const PatchStack stack, double M_1) const
@@ -358,5 +492,6 @@ double StdNlBayes::estimateSigmaP(const PatchStack stack, double M_1) const
   double sigmaP = 0;
   for(int i=0;i<stack.size();i++)
     sigmaP += (1/M_1)*stack[i].cwiseProduct(stack[i]).sum() - pow((1/M_1)*stack[i].sum(),2);
-  return M_1 / (M_1 - 1.) * sigmaP;
+  return sqrt(M_1 / (M_1 - 1.) * sigmaP);
 }
+

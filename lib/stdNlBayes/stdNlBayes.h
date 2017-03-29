@@ -48,12 +48,17 @@ public:
   void saveResult(std::string filePath) const;
   //Compute distance between patches
   double getDistance(ImageChannel chan, int i0, int j0, int i1, int j1, int w, int h) const;
+  //Compute distance between patches for second step
+  double getDistance2(ImageType im, int i0, int j0, int i1, int j1, int w, int h) const;
   //Estimate standard deviation of a stack of similar patches
   double estimateSigmaP(const PatchStack stack, double M_1) const;
 private:
   ImageType image;
   ImageType image_yuv;
   ImageType image_u; //Estimate at the end of the first step
+  ImageType image_final;
+  ImageType image_final_rgb;
+  ImageType image_u_rgb;
   Eigen::Matrix3d rgb2yuv_mat;
   Eigen::Matrix3d yuv2rgb_mat;
 
